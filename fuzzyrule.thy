@@ -36,7 +36,6 @@ datatype ('a,'subst) Try_match_res =
   | MightMatch of 'a
 
 
-datatype 'a option = Some of 'a | None
 
 type fo_subst = (((indexname * sort) * ctyp) list * ((indexname * typ) * cterm) list )
 
@@ -45,10 +44,10 @@ fun try_first_order_match (a: cterm) (b: cterm) (subst: fo_subst): fo_subst opti
     val a: cterm = Thm.instantiate_cterm subst a
     val b: cterm = Thm.instantiate_cterm subst b
   in
-    (Some (Thm.first_order_match (b, a))) 
+    (SOME (Thm.first_order_match (b, a))) 
     handle Pattern.MATCH => 
-    ((Some (Thm.first_order_match (a, b))) 
-    handle Pattern.MATCH => None)
+    ((SOME (Thm.first_order_match (a, b))) 
+    handle Pattern.MATCH => NONE)
   end
 
 (* returns the lambda var and lambda body to construct the match*)
@@ -63,8 +62,8 @@ fun try_match (a: cterm) (b: cterm) subst vIndex: (cterm*cterm, ((indexname * so
     val _ = writeln ("first order match result = " ^  @{make_string} m)
     val result = 
       case m of
-          Some subst => Matches subst (* TODO use subst*)
-          | None => (
+          SOME subst => Matches subst (* TODO use subst*)
+          | NONE => (
             case (Thm.term_of a, Thm.term_of b) of
             (_ $ _, _ $ _) => (
               let 
@@ -77,7 +76,7 @@ fun try_match (a: cterm) (b: cterm) subst vIndex: (cterm*cterm, ((indexname * so
                  Matches subst => 
                   let 
                   in
-                  case try_match a_carg b_carg subst vIndex of (* TODO do not recurse into arguments, just use first order matching here *)
+                  case try_match a_carg b_carg subst vIndex of
                     Matches subst => Matches subst
                   | MightMatch (v,b) => MightMatch (v, Thm.apply a_cf b)
                   | NoMatch => 
@@ -202,6 +201,36 @@ fun fuzzy_rule_step ctxt maxidx rule iteration i thm : ((thm * int) Seq.seq) =
       end
   end
 
+fun seq_range (start: int) (count: int): int Seq.seq =
+  Seq.make (fn () =>   
+    if count <= 0 then NONE
+    else SOME (start, seq_range (start+1) (count-1)))
+
+fun range start count =
+  if count <= 0 then [] else start :: range (start+1) (count-1)
+
+fun resolve_with_facts ctxt (facts: thm list) (thm: thm) (goal_idxs: int list): thm Seq.seq =
+  case facts of 
+  [] => Seq.single thm
+  | (f:: fs) =>
+    let
+      val subgoals = Thm.cprems_of thm
+      val _ = writeln ("subgoals = " ^ @{make_string} subgoals)
+      val _ = writeln (" goal_idxs = " ^ @{make_string} goal_idxs)  
+    in
+    goal_idxs
+    |> Seq.of_list
+    |> Seq.maps (fn i => 
+      Tactic.resolve_tac ctxt [f] i thm
+      |> Seq.maps (fn newthm =>
+          let
+            val new_subgoals = length (Thm.cprems_of newthm) - length (Thm.cprems_of thm)
+            val new_goal_idxs: int list = (take (i-1) goal_idxs) @ (map (fn i => i + new_subgoals) (drop (i) goal_idxs))
+          in
+               resolve_with_facts ctxt fs newthm new_goal_idxs
+          end))
+      
+    end
 
 fun fuzzy_rule (ctxt: Proof.context) (rules: thm list) (facts: thm list) (i: int) (thm: thm) : thm Seq.seq = 
     let 
@@ -214,10 +243,13 @@ fun fuzzy_rule (ctxt: Proof.context) (rules: thm list) (facts: thm list) (i: int
         val maxidx = maxidx_of_thms ([thm] @ rules @ facts)
         val res_thms = fuzzy_rule_step ctxt maxidx rule 0 i thm
       in
-        res_thms |> Seq.map (fn (res_thm, eqs) =>
-          (* use facts to resolve subgoals from left to right *)
-
-        res_thm
+        res_thms |> Seq.maps (fn (res_thm, eqs) =>
+          let 
+            val newSubgoals = Thm.cprems_of res_thm
+            val subgoal_count = 1 + length newSubgoals - length subgoals
+          in
+            resolve_with_facts ctxt facts res_thm (range i subgoal_count)
+          end
         )
       end
     | _ =>
@@ -267,10 +299,11 @@ val tt= Thm.instantiate ([((("'a", 0), @{sort "type"}), @{ctyp "int"}) ],
 
 lemma 
   fixes x y z :: int
-  assumes a: "x \<le> y" and b: "y \<le> z"
-  shows "x \<le> z"
+  assumes a: "Q \<Longrightarrow> x \<le> y" and b: "R \<Longrightarrow> y \<le> z"
+  shows "x \<le> z \<and> x \<le> y \<and> y \<le> z"
+  apply (intro conjI)
 (*  using b a  apply (rule order.trans) *)
-  using b a  apply (fuzzy_rule order.trans)
+  using b a apply (fuzzy_rule order.trans)
   using a b  apply auto
   done
 
