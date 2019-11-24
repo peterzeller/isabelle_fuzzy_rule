@@ -30,21 +30,40 @@ THM:
 *)
 
 
-datatype 'a Try_match_res = NoMatch | Matches | MightMatch of 'a
+datatype ('a,'subst) Try_match_res = 
+    NoMatch 
+  | Matches of 'subst 
+  | MightMatch of 'a
+
+
 datatype 'a option = Some of 'a | None
 
+type fo_subst = (((indexname * sort) * ctyp) list * ((indexname * typ) * cterm) list )
+
+fun try_first_order_match (a: cterm) (b: cterm) (subst: fo_subst): fo_subst option =
+  let 
+    val a: cterm = Thm.instantiate_cterm subst a
+    val b: cterm = Thm.instantiate_cterm subst b
+  in
+    (Some (Thm.first_order_match (b, a))) 
+    handle Pattern.MATCH => 
+    ((Some (Thm.first_order_match (a, b))) 
+    handle Pattern.MATCH => None)
+  end
+
 (* returns the lambda var and lambda body to construct the match*)
-fun try_match (a: cterm) (b: cterm) vIndex: (cterm*cterm) Try_match_res = 
+fun try_match (a: cterm) (b: cterm) subst vIndex: (cterm*cterm, ((indexname * sort) * ctyp) list *
+    ((indexname * typ) * cterm) list) Try_match_res = 
  
   let 
-    val _ = writeln ("try_match = " 
-          ^  "  " ^  @{make_string} a 
-          ^  " WITH " ^  @{make_string} b)
-    val m = (Some (Thm.first_order_match (a, b))) handle Pattern.MATCH => None
+    val _ = writeln (
+             "try_match " ^  @{make_string} a 
+          ^  "\n     WITH " ^  @{make_string} b)
+    val m = try_first_order_match a b subst
     val _ = writeln ("first order match result = " ^  @{make_string} m)
     val result = 
       case m of
-          Some _ => Matches
+          Some subst => Matches subst (* TODO use subst*)
           | None => (
             case (Thm.term_of a, Thm.term_of b) of
             (_ $ _, _ $ _) => (
@@ -54,15 +73,18 @@ fun try_match (a: cterm) (b: cterm) vIndex: (cterm*cterm) Try_match_res =
                 val a_carg = Thm.dest_arg a
                 val b_carg = Thm.dest_arg b
               in
-                case try_match a_cf b_cf vIndex of
-                 Matches => (
-                  case try_match a_carg b_carg vIndex of
-                    Matches => Matches
+                case try_match a_cf b_cf subst vIndex of
+                 Matches subst => 
+                  let 
+                  in
+                  case try_match a_carg b_carg subst vIndex of (* TODO do not recurse into arguments, just use first order matching here *)
+                    Matches subst => Matches subst
                   | MightMatch (v,b) => MightMatch (v, Thm.apply a_cf b)
                   | NoMatch => 
                       let val v: cterm = Thm.var (("x", 0), Thm.ctyp_of_cterm a_carg)
                       in MightMatch (v, Thm.apply a_cf v)
-                      end)
+                      end
+                  end
                 | MightMatch (v, b) => MightMatch (v, Thm.apply b  a_carg)
                 | NoMatch =>  NoMatch
               end)
@@ -71,10 +93,10 @@ fun try_match (a: cterm) (b: cterm) vIndex: (cterm*cterm) Try_match_res =
                     ^ "a = " ^ @{make_string} (Thm.term_of a) 
                     ^ "b = " ^ @{make_string} (Thm.term_of b) )
                 NoMatch)
-    val _ = writeln ("try_match = " 
-          ^  " " ^ @{make_string} a 
-          ^  " WITH " ^ @{make_string} b
-          ^  " ==> " ^ @{make_string} result)
+    val _ = writeln (
+             " try_match " ^ @{make_string} a 
+          ^  "\n WITH " ^ @{make_string} b
+          ^  "\n ==> " ^ @{make_string} result)
   in
      result
   end
@@ -86,8 +108,8 @@ fun remove_pure_prop (ct: cterm): cterm =
    | _ => ct
 
 
-fun find_back_subst_P (a: cterm) (b: cterm): cterm Try_match_res =
-  case try_match (remove_pure_prop a) (remove_pure_prop b) 0 of
+fun find_back_subst_P (a: cterm) (b: cterm): (cterm,unit) Try_match_res =
+  case try_match (remove_pure_prop a) (remove_pure_prop b) ([],[]) 0 of
     MightMatch (v,b) => 
       let 
         val _ = writeln ("back_subst_P = " ^ @{make_string} v ^ " => " ^ @{make_string} b)
@@ -96,7 +118,7 @@ fun find_back_subst_P (a: cterm) (b: cterm): cterm Try_match_res =
         MightMatch abs
       end
   | NoMatch => NoMatch
-  | Matches => Matches
+  | Matches _ => Matches ()
 
 fun new_back_subst ctxt (a_t: typ) (vP: string) (vx: string) (vy: string): thm = 
   let 
@@ -143,66 +165,60 @@ fun maxidx_of_thm thm =
 fun maxidx_of_thms thms =
   List.foldl (uncurry max) ~1 (map maxidx_of_thm thms)
 
+fun fuzzy_rule_step ctxt maxidx rule iteration i thm : ((thm * int) Seq.seq) = 
+  if iteration > 20 then Seq.empty
+  else
+  let 
+    val goal = nth (Thm.cprems_of thm) (i-1)
+    val _ = writeln ("fuzzy rule:"
+                ^ "\n rule: " ^ ( @{make_string} rule)
+                ^ "\n goal: " ^ ( @{make_string} goal)
+      ) 
+    val m = find_back_subst_P goal (Thm.cconcl_of rule)
+    val _ = writeln ("m = " ^ (@{make_string} m))
+  in
+  case m of
+    Matches () =>
+      (Tactic.resolve_tac ctxt [rule] i thm) |> Seq.map (fn t => (t, iteration))
+  | NoMatch =>
+      Seq.empty
+  | MightMatch p =>
+      let 
+        val maxIndex = max maxidx (maxidx_of_thms ([thm, rule]))
+        val ptyp = Thm.ctyp_of_cterm p
+        val ptyp_raw = Thm.typ_of ptyp
+        val argtyp = Thm.dest_ctyp0 ptyp
+        val argtyp_raw = Thm.typ_of argtyp
+        val vname: string = "y"
+        val v = Thm.cterm_of ctxt (Var ((vname,maxIndex + 1), argtyp_raw))
+        val back_subst = Thm.instantiate ([((("'a", 0), @{sort "type"}), argtyp) ], 
+              [((("P", 0), ptyp_raw), p ), 
+               ((("a", 0), argtyp_raw), v)]) 
+              @{thm back_subst}
+        val _ = writeln ("rule1: " ^ @{make_string} back_subst)
+        val newThms = Tactic.resolve_tac ctxt [back_subst] i thm
+      in
+        Seq.maps (fn(thm) => fuzzy_rule_step ctxt maxidx rule (iteration+1) i thm) newThms
+      end
+  end
+
+
 fun fuzzy_rule (ctxt: Proof.context) (rules: thm list) (facts: thm list) (i: int) (thm: thm) : thm Seq.seq = 
     let 
-      val _ = trace ("fuzzy " 
-                    ^ "\n ctxt: " ^ ( @{make_string}  ctxt ) 
-                    ^ "\n rules: " ^ ( @{make_string} rules)
-                    ^ "\n facts: " ^ ( @{make_string} facts)
-                    ^ "\n i: " ^ ( @{make_string} i)
-                    ^ "\n thm: " ^ ( @{make_string} thm)
-                    ^ "\n thm concl: " ^ ( @{make_string} (Thm.cconcl_of thm))
-                    ^ "\n thm prems: " ^ ( @{make_string} (Thm.cprems_of thm))
-
-                 ) ()
       val subgoals = Thm.cprems_of thm
     in
     if i < 1 orelse i > length subgoals then trace "Warning: wrong subgoal index" Seq.empty
     else case rules of
      [rule] =>
       let 
-        val _ = trace ("fuzzy rule:"
-                    ^ "\n rule concl: " ^ ( @{make_string} (Thm.cconcl_of rule))
-                    ^ "\n rule prems: " ^ ( @{make_string} (Thm.cprems_of rule))
-                    ^ "\n rule prop: " ^ ( @{make_string} (Thm.cprop_of rule))
-                    ^ "\n rule hyps: " ^ ( @{make_string} (Thm.chyps_of rule))
-          ) ()
-        val goal = nth (Thm.cprems_of thm) (i-1)
-        val _ = writeln ("goal = " ^ @{make_string} goal)
-        val m = find_back_subst_P goal (Thm.cconcl_of rule)
-        val _ = writeln ("m = " ^ (@{make_string} m))
+        val maxidx = maxidx_of_thms ([thm] @ rules @ facts)
+        val res_thms = fuzzy_rule_step ctxt maxidx rule 0 i thm
       in
-      case m of
-        Matches =>
-          Tactic.resolve_tac ctxt rules i thm
-      | NoMatch =>
-          Seq.empty
-      | MightMatch p =>
-          let 
-            val maxIndex = maxidx_of_thms ([thm] @ rules @ facts ) 
-            val ptyp = Thm.ctyp_of_cterm p
-            val ptyp_raw = Thm.typ_of ptyp
-            val argtyp = Thm.dest_ctyp0 ptyp
-            val argtyp_raw = Thm.typ_of argtyp
-            val vname: string = "y"
-            val v = Thm.cterm_of ctxt (Var ((vname,maxIndex + 1), argtyp_raw))
-            val back_subst = Thm.instantiate ([((("'a", 0), @{sort "type"}), argtyp) ], 
-                  [((("P", 0), ptyp_raw), p ), 
-                   ((("a", 0), argtyp_raw), v)]) 
-                  @{thm back_subst}
-            val _ = writeln ("rule1: " ^ @{make_string} back_subst)
-            (*val back_subst1: thm = new_back_subst ctxt (Thm.typ_of argtyp) "blubP" "blubX" "blubY"
-            val _ = writeln ("back_subst1: " ^ @{make_string} back_subst1)
-            val back_subst2 = Thm.instantiate ([((("'a", 0), @{sort "type"}), argtyp) ], [((("Q", 0), ptyp_raw), p )]) back_subst1
-            val _ = writeln ("back_subst2: " ^ @{make_string} back_subst2)*)
-          (* TODO rename schematic vars*)
-          in
-            Tactic.resolve_tac ctxt [back_subst] i thm
-          end
-      (*Seq.empty*)
-      (*Tactical.ORELSE
-      (Tactic.resolve_tac ctxt rules i,
-       Tactic.resolve_tac ctxt [@{thm back_subst}] i) thm*)
+        res_thms |> Seq.map (fn (res_thm, eqs) =>
+          (* use facts to resolve subgoals from left to right *)
+
+        res_thm
+        )
       end
     | _ =>
       trace "Only one rule allowed for fuzzy_rule method"
@@ -219,7 +235,7 @@ val _ =
 
 \<close>
 
-declare[[show_sorts]]
+declare[[show_sorts=true]]
 thm back_subst
 
 ML \<open>
@@ -249,7 +265,32 @@ val tt= Thm.instantiate ([((("'a", 0), @{sort "type"}), @{ctyp "int"}) ],
 \<close> 
 
 
+lemma 
+  fixes x y z :: int
+  assumes a: "x \<le> y" and b: "y \<le> z"
+  shows "x \<le> z"
+(*  using b a  apply (rule order.trans) *)
+  using b a  apply (fuzzy_rule order.trans)
+  using a b  apply auto
+  done
+
+
+
 thm back_subst[where P="\<lambda>x. x > 5"]
+lemma 
+  fixes P :: "int \<Rightarrow> int \<Rightarrow> bool"
+  assumes rr: "\<And>x. P x x"
+  shows "P (3*4) (4*3)"
+  apply (fuzzy_rule rr)
+   apply auto
+  done
+
+lemma 
+  shows "(SOME x::int. x \<ge> 5 \<and> x < 6) = 5"
+  apply (fuzzy_rule someI[where P="\<lambda>x::int. x = 5"])
+   apply auto
+  done
+
 
 
 locale example =
@@ -260,27 +301,10 @@ declare[[rule_trace=true]]
 
 lemma (in example) 
   assumes a: "4 > 2"
-and rr: "\<And>(Q::'a::type \<Rightarrow> 'b::type \<Rightarrow> bool) (x::'a::type) (x'::'a::type) (y::'b::type) y'::'b::type. \<lbrakk>Q x y; x = x'; y = y'\<rbrakk> \<Longrightarrow> Q x' y'"
 shows "P 8 4"
   apply (fuzzy_rule R)
-   apply (fuzzy_rule R)
-    apply (fuzzy_rule R)
     apply auto
   done
-proof -
-  show "2 * 4 = (8::int)"
-    by simp
-  show "(2::int) * 2 = 4" 
-    by simp
-  show "2 \<le> (2::int)"
-    by simp
-qed
-  thm back_subst
-
- apply (rule back_subst[where P="\<lambda>x. P x 4"])
-apply (fuzzy_rule R)
-
-  oops
 
 lemma 
   assumes a: "x + a = x"
