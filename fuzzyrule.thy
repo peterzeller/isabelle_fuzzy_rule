@@ -237,8 +237,9 @@ fun fuzzy_rule (ctxt: Proof.context) (rules: thm list) (facts: thm list) (i: int
       val subgoals = Thm.cprems_of thm
     in
     if i < 1 orelse i > length subgoals then trace "Warning: wrong subgoal index" Seq.empty
-    else case rules of
-     [rule] =>
+    else
+     Seq.of_list rules
+     |> Seq.maps (fn rule =>
       let 
         val maxidx = maxidx_of_thms ([thm] @ rules @ facts)
         val res_thms = fuzzy_rule_step ctxt maxidx rule 0 i thm
@@ -251,10 +252,7 @@ fun fuzzy_rule (ctxt: Proof.context) (rules: thm list) (facts: thm list) (i: int
             resolve_with_facts ctxt facts res_thm (range i subgoal_count)
           end
         )
-      end
-    | _ =>
-      trace "Only one rule allowed for fuzzy_rule method"
-      Seq.empty
+      end)
     end
 
 
