@@ -98,29 +98,50 @@ fun find_back_subst_P (a: cterm) (b: cterm): cterm Try_match_res =
   | NoMatch => NoMatch
   | Matches => Matches
 
-fun new_back_subst ctxt va vb = 
+fun new_back_subst ctxt (a_t: typ) (vP: string) (vx: string) (vy: string): thm = 
   let 
     val imp = Const ("Pure.imp", @{typ "prop \<Rightarrow> prop \<Rightarrow> prop"})
     val trueprop = (Const ("HOL.Trueprop", @{typ "bool \<Rightarrow> prop"}))
-    val Q = Var (("Q", 0), @{typ "'a::type \<Rightarrow> 'b::type \<Rightarrow> bool"})
-    val x = Var (("x", 1), @{typ "'a::type"})
-    val x2 = Var (("x'",2), @{typ "'a::type"})
-    val y = Var (("y",3), @{typ "'b::type"})
-    val y2 = Var (("y'",4), @{typ "'b::type"})
-    val eqa = Const ("HOL.eq", @{typ "'a::type \<Rightarrow> 'a::type \<Rightarrow> bool"})
-    val eqb = Const ("HOL.eq", @{typ "'b::type \<Rightarrow> 'b::type \<Rightarrow> bool"})
-    val t: term = imp $
-     (trueprop $ (Q $ x $ y)) $
+    val Q = Bound 2
+    val x = Bound 1
+    val x2 = Bound 0
+    val eqa = Const ("HOL.eq", a_t --> a_t --> @{typ "bool"})
+    val t_prop = @{typ "prop"}
+    fun all s t b = Const ("Pure.all", (t --> t_prop) --> t_prop) $ Abs (s, t, b)
+
+(* Const ("Pure.all", "('a::type \<Rightarrow> prop) \<Rightarrow> prop") $
+     Abs ("x", "'a::type",
+       Const ("Pure.all", "('b::type \<Rightarrow> prop) \<Rightarrow> prop") $
+         Abs ("y", "'b::type",
+*)
+
+    val t: term = 
+     all vP (a_t --> @{typ "bool"})  ( all vx a_t (all vy a_t ( 
+     imp $ (trueprop $ (Q $ x2)) $
      (imp $
-       (trueprop $ (eqa $ x $ x2)) $
-       (imp $
-         (trueprop $ (eqb $ y $ y2)) $
-         (trueprop $ (Q $ x2 $ y2))))
+       (trueprop $ (eqa $ x2 $ x)) $
+       (trueprop $ (Q $ x))))))
+    val athm = Assumption.assume ctxt (Thm.cterm_of ctxt t)
+    val thm2 = Tactic.resolve_tac ctxt [@{thm back_subst}] 1 athm
+    val _ = writeln ("thm 2 = " ^ (@{make_string} (Seq.list_of thm2)))
+    val thm3 = Assumption.export true ctxt ctxt (Seq.hd thm2)
+    val _ = writeln ("thm 3 = " ^ (@{make_string} thm3))
   in 
-    Thm.assume (Thm.cterm_of ctxt t)
+    thm3
   end
 (* TODO instead generate \<And>Q x x' y y'.  ... then prove with stuff  *)
 
+fun max x y = if x < y then y else x
+
+fun maxidx_of_terms terms =
+  List.foldl (uncurry max) ~1 (map maxidx_of_term terms)
+
+fun maxidx_of_thm thm =
+  max (maxidx_of_term (Thm.concl_of thm)) (maxidx_of_terms (Thm.prems_of thm))
+
+
+fun maxidx_of_thms thms =
+  List.foldl (uncurry max) ~1 (map maxidx_of_thm thms)
 
 fun fuzzy_rule (ctxt: Proof.context) (rules: thm list) (facts: thm list) (i: int) (thm: thm) : thm Seq.seq = 
     let 
@@ -158,15 +179,22 @@ fun fuzzy_rule (ctxt: Proof.context) (rules: thm list) (facts: thm list) (i: int
           Seq.empty
       | MightMatch p =>
           let 
+            val maxIndex = maxidx_of_thms ([thm] @ rules @ facts ) 
             val ptyp = Thm.ctyp_of_cterm p
             val ptyp_raw = Thm.typ_of ptyp
             val argtyp = Thm.dest_ctyp0 ptyp
-            val back_subst = Thm.instantiate ([((("'a", 0), @{sort "type"}), argtyp) ], [((("P", 0), ptyp_raw), p )]) @{thm back_subst}
+            val argtyp_raw = Thm.typ_of argtyp
+            val vname: string = "y"
+            val v = Thm.cterm_of ctxt (Var ((vname,maxIndex + 1), argtyp_raw))
+            val back_subst = Thm.instantiate ([((("'a", 0), @{sort "type"}), argtyp) ], 
+                  [((("P", 0), ptyp_raw), p ), 
+                   ((("a", 0), argtyp_raw), v)]) 
+                  @{thm back_subst}
             val _ = writeln ("rule1: " ^ @{make_string} back_subst)
-            val back_subst1: thm = new_back_subst ctxt "blub" "bla"
+            (*val back_subst1: thm = new_back_subst ctxt (Thm.typ_of argtyp) "blubP" "blubX" "blubY"
             val _ = writeln ("back_subst1: " ^ @{make_string} back_subst1)
-            val back_subst2 = Thm.instantiate ([((("'a", 0), @{sort "type"}), argtyp) ], [((("P", 0), ptyp_raw), p )]) back_subst1
-            val _ = writeln ("back_subst2: " ^ @{make_string} back_subst2)
+            val back_subst2 = Thm.instantiate ([((("'a", 0), @{sort "type"}), argtyp) ], [((("Q", 0), ptyp_raw), p )]) back_subst1
+            val _ = writeln ("back_subst2: " ^ @{make_string} back_subst2)*)
           (* TODO rename schematic vars*)
           in
             Tactic.resolve_tac ctxt [back_subst] i thm
@@ -208,16 +236,17 @@ ML \<open>
 Thm.renamed_prop (Const ("HOL.Trueprop", @{typ "bool \<Rightarrow> prop"}) $ (Const ("Scratch.P", @{typ "int \<Rightarrow> bool"}) $ Var (("x", 0), @{typ "int"}))) @{thm xx}
 \<close> 
 
-ML \<open>@{term "\<lbrakk>Q x y; x = x'; y = y'\<rbrakk> \<Longrightarrow> Q x' y'"}
+ML \<open>
+ @{term "\<And>Q x. \<lbrakk>Q x; x = y\<rbrakk> \<Longrightarrow> Q y"}
 \<close> 
 
 ML \<open>
-val tt= Thm.instantiate ([((("'a", 0), @{sort "type"}), @{ctyp "int"}) ], [((("P", 0), @{typ "int \<Rightarrow> bool"}), @{cterm "P"} )]) @{thm back_subst}
+val xxx : cterm = Thm.cterm_of @{context} (Var (("blub",0), @{typ int}))
+val tt= Thm.instantiate ([((("'a", 0), @{sort "type"}), @{ctyp "int"}) ], 
+  [((("P", 0), @{typ "int \<Rightarrow> bool"}), @{cterm "P"} ),
+   ((("a", 0), @{typ "int"}), xxx)]) 
+  @{thm back_subst}
 \<close> 
-
-
-
-
 
 
 thm back_subst[where P="\<lambda>x. x > 5"]
@@ -231,10 +260,22 @@ declare[[rule_trace=true]]
 
 lemma (in example) 
   assumes a: "4 > 2"
-  shows "P 8 4"
+and rr: "\<And>(Q::'a::type \<Rightarrow> 'b::type \<Rightarrow> bool) (x::'a::type) (x'::'a::type) (y::'b::type) y'::'b::type. \<lbrakk>Q x y; x = x'; y = y'\<rbrakk> \<Longrightarrow> Q x' y'"
+shows "P 8 4"
   apply (fuzzy_rule R)
    apply (fuzzy_rule R)
-
+    apply (fuzzy_rule R)
+    apply auto
+  done
+proof -
+  show "2 * 4 = (8::int)"
+    by simp
+  show "(2::int) * 2 = 4" 
+    by simp
+  show "2 \<le> (2::int)"
+    by simp
+qed
+  thm back_subst
 
  apply (rule back_subst[where P="\<lambda>x. P x 4"])
 apply (fuzzy_rule R)
