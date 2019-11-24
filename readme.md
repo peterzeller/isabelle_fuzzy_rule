@@ -8,3 +8,9 @@ It performs matching differently, making it more flexible in many  cases:
 - Facts can be given in any order.
 
 See [fuzzyrule_examples.thy](fuzzyrule_examples.thy) for examples.
+
+# Contributions
+
+Please use the Github issue tracker for feedback, questions, and bug reports.
+
+Pull requests are welcome.
