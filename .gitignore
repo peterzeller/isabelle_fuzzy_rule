@@ -3,3 +3,4 @@ output
 *.aux
 *.fls
 *.fdb_latexmk
+*.log

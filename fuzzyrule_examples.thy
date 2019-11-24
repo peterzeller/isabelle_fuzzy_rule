@@ -1,21 +1,31 @@
+section \<open>Fuzzy Rule Examples\<close>
+
 theory fuzzyrule_examples
   imports fuzzyrule
 begin
 
-text "Fuzzy Rule Examples"
+text \<open>The method @{method fuzzy_rule} works similar to @{method rule} but is more flexible in its application.\<close>
 
-text "The method @{method fuzzy_rule} works similar to @{method rule} but "
+text \<open>For instance, the rule R in the following example cannot be applied with @{method rule}
+as @{term "8::int"} does not match the pattern @{term "a*b"}.  \<close>
 
 lemma 
   fixes P :: "int \<Rightarrow> int \<Rightarrow> bool"
   assumes R: "\<And>a b c. a \<ge> 2 \<Longrightarrow> P (a*b) (a*c)"
   shows "P 8 4"
   apply (fuzzy_rule R)
-    apply auto
-  done
 
-proof (fuzzy_rule R)
+  text \<open>With @{method fuzzy_rule}, new schematic variables and subgoals for proving the necessary equalities
+are automatically introduced, giving the following subgoals: 
 
+@{subgoals}
+
+
+These subgoals can then be discharged automatically:\<close>
+
+    by auto
+
+  text \<open>This also works when a variable appears multiple times in a rule:\<close>
 
 
 lemma 
@@ -23,113 +33,58 @@ lemma
   assumes rr: "\<And>x. P x x"
   shows "P (3*4) (4*3)"
   apply (fuzzy_rule rr)
-   apply auto
-  done
 
+  text \<open> Here we get the following subgoal:  
+
+@{subgoals}
+
+\<close>
+
+  by auto
+
+text "The method @{method fuzzy_rule} is also more flexible in the use of facts.
+While @{method rule} requires all facts to be given in the correct order, 
+with @{method fuzzy_rule} the order only determines a priority, but does not affect the set of results.
+Therefore the following application of the transitivity rule works, even though the facts @{term a} 
+and @{term b} are given in the wrong order:  "
 
 
 lemma 
   fixes x y z :: int
+  assumes a: "x \<le> y" and b: "y \<le> z"
+    and q: Q and r: R
+  shows "x \<le> z"
+  using b a by (fuzzy_rule order.trans)
+
+text "The following example tests that the rule does not interfere with other subgoals: "
+
+lemma 
+  fixes x y z :: int
   assumes a: "Q \<Longrightarrow> x \<le> y" and b: "R \<Longrightarrow> y \<le> z"
+    and q: Q and r: R
   shows "x \<le> z \<and> x \<le> y \<and> y \<le> z"
   apply (intro conjI)
-(*  using b a  apply (rule order.trans) *)
   using b a apply (fuzzy_rule order.trans)
-  using a b  apply auto
-  done
-
-
-
-thm back_subst[where P="\<lambda>x. x > 5"]
-
-
-lemma 
-  shows "(SOME x::int. x \<ge> 5 \<and> x < 6) = 5"
-  apply (fuzzy_rule someI[where P="\<lambda>x::int. x = 5"])
-   apply auto
-  done
-
-
-
-locale example =
-  fixes P :: "int \<Rightarrow> int \<Rightarrow> bool"
-  assumes R: "\<And>a b c. a \<ge> 2 \<Longrightarrow> P (a*b) (a*c)"
-
-declare[[rule_trace=true]]
-
-lemma (in example) 
-  assumes a: "4 > 2"
-shows "P 8 4"
-  apply (fuzzy_rule R)
-    apply auto
-  done
-
-lemma 
-  assumes a: "x + a = x"
-  shows "Q (\<lambda>x. f x a)"
-  apply (fuzzy_rule a)
-
-
-lemma (in example) 
-  assumes a: "4 > 2"
-  shows "P (2*4) (2*2)"
-  apply (fuzzy_rule R)
-  oops
-
-
-lemma (in example) 
-  assumes a: "4 > 2"
-  shows "P 8 4"
-  apply (rule back_subst[where P="\<lambda>x. P 8 x"], rule back_subst[where b="8"], rule R) back 
 proof -
-  show "2 \<le> (2::int)"
-    by simp
-   apply_end auto
-qed
-
-  show "P (2*4) (2*2)"
-    by (rule R, simp)
-  show " 2 * 4 = (8::int)"
-    by simp
-  show " 2 * 2 = (4::int)"
-    by simp
+  show Q using q . 
+  show R using r .
+  show "x \<le> y" using a q by auto
+  show "y \<le> z" using b r by auto
 qed
 
 
-lemma comm: "x+y = y+(x::int)"
-  by simp
+subsection "Future Work"
 
-lemma "1+(2::int) = 2+1"
-  apply (fuzzy_rule comm)
+text "In a future version, matching should also work for lambda instructions as in the following example:"
 
-ML \<open>
-writeln (@{make_string} @{cterm "1+1"});
-writeln (@{make_string} (Thm.cprop_of @{thm comm}));
-writeln (@{make_string} (Thm.first_order_match (@{cterm "2+1 = 1+(2::int)"}, Thm.cprop_of @{thm comm})))
-\<close>
-
-
-lemma (in example) 
-  assumes a: "4 > 2"
-  shows "P (2*4) (2*2)"
-  using a apply (fuzzy_rule R)
-  apply simp
-  done
-
-
-lemma (in example) 
-  assumes a: "4 > 2"
-  shows "P 8 4"
-  using a apply (fuzzy_rule R)
-
-
-lemma (in example) "P 8 4"
-proof (fuzzy_rule R)  (* FAILS *)
-
+lemma 
+  shows "(SOME x::int. x \<ge> 5 \<and> x < 7 \<and> x mod 2 = 1) = 5"
+  apply (fuzzy_rule someI)
   oops
 
-lemma (in example) "P 8 4"
-proof (rule R)  (* FAILS *)
+
+  text "Additionally, it would be nice to have a similar fuzzy alternative for the @{method subst} method."
+
 
 
 
