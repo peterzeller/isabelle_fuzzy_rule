@@ -135,20 +135,22 @@ fun resolve_with_facts ctxt (facts: thm list) (thm: thm) (goal_idxs: int list): 
   case facts of 
   [] => Seq.single thm
   | (f:: fs) =>
-    goal_idxs
-    |> Seq.of_list
-    |> Seq.maps (fn i => 
-      Tactic.resolve_tac ctxt [f] i thm
-      |> Seq.maps (fn newthm =>
-          let
-            val new_subgoals = length (Thm.cprems_of newthm) - length (Thm.cprems_of thm)
-            val new_goal_idxs = (take (i-1) goal_idxs) @ (map (fn i => i + new_subgoals) (drop (i) goal_idxs))
-          in
-            resolve_with_facts ctxt fs newthm new_goal_idxs
-          end))
+    let
+      fun continue i newthm =
+        let
+          val new_subgoals = length (Thm.cprems_of newthm) - length (Thm.cprems_of thm)
+          val new_goal_idxs = (take (i-1) goal_idxs) @ (map (fn i => i + new_subgoals) (drop (i) goal_idxs))
+        in
+          resolve_with_facts ctxt fs newthm new_goal_idxs
+        end
+      val goal_idxs_seq = Seq.of_list goal_idxs
+    in
+      Seq.append 
+        (goal_idxs_seq |> Seq.maps (fn i => Tactic.resolve_tac ctxt [f] i thm |> Seq.maps (continue i)))
+        (goal_idxs_seq |> Seq.maps (fn i => fuzzy_rule ctxt [f] [] i thm      |> Seq.maps (continue i)))
+    end
       
-
-fun fuzzy_rule (ctxt: Proof.context) (rules: thm list) (facts: thm list) (i: int) (thm: thm) : thm Seq.seq = 
+and fuzzy_rule (ctxt: Proof.context) (rules: thm list) (facts: thm list) (i: int) (thm: thm) : thm Seq.seq = 
     let 
       val subgoals = Thm.cprems_of thm
     in

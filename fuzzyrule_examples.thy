@@ -73,6 +73,19 @@ proof -
 qed
 
 
+text "The facts are first applied with normal rule application, but if this is not successful
+  we try to apply @{method fuzzy_rule} recursively, so that they do not have to match exactly."
+
+lemma 
+  assumes a: "\<And>a b. P (a,b)"
+    and f_def: "\<And>a b. f a b = (a,b)"
+    and r: "\<And>a b. \<lbrakk>P (f a b)\<rbrakk> \<Longrightarrow> Q (a,b) y"
+  shows "Q x y"
+  using a proof (fuzzy_rule r)
+  show "(fst x, snd x) = x" by force
+  show "(fst x, snd x) = f (fst x) (snd x)" unfolding f_def ..
+qed
+
 subsection "Future Work"
 
 text "In a future version, matching should also work for lambda instructions as in the following example:"
@@ -81,6 +94,7 @@ lemma
   shows "(SOME x::int. x \<ge> 5 \<and> x < 7 \<and> x mod 2 = 1) = 5"
   apply (fuzzy_rule someI)
   oops
+
 
 
   text "Additionally, it would be nice to have a similar fuzzy alternative for the @{method subst} method."
