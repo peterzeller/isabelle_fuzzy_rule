@@ -47,7 +47,7 @@ fun try_first_order_match_bidirectional (a: cterm) (b: cterm) (subst: fo_subst):
   end
 
 (* returns the lambda var and lambda body to construct the match*)
-fun try_match ctxt (a: cterm) (b: cterm) substI vIndex (depVars: cterm list): (cterm*cterm, ((indexname * sort) * ctyp) list *
+fun try_match noabs ctxt (a: cterm) (b: cterm) substI vIndex (depVars: cterm list): (cterm*cterm, ((indexname * sort) * ctyp) list *
     ((indexname * typ) * cterm) list) Try_match_res = 
  
   let 
@@ -64,11 +64,11 @@ fun try_match ctxt (a: cterm) (b: cterm) substI vIndex (depVars: cterm list): (c
                 val a_carg = Thm.dest_arg a
                 val b_carg = Thm.dest_arg b
               in
-                case try_match ctxt a_cf b_cf substI vIndex depVars of
+                case try_match noabs ctxt a_cf b_cf substI vIndex depVars of
                  Matches subst => 
                   let 
                   in
-                  case try_match ctxt a_carg b_carg subst vIndex depVars of
+                  case try_match noabs ctxt a_carg b_carg subst vIndex depVars of
                     Matches subst => Matches subst
                   | MightMatch (v,b) => MightMatch (v, Thm.apply a_cf b)
                   | NoMatch => 
@@ -84,13 +84,14 @@ fun try_match ctxt (a: cterm) (b: cterm) substI vIndex (depVars: cterm list): (c
                 | MightMatch (v, b) => MightMatch (v, Thm.apply b  a_carg)
                 | NoMatch =>  NoMatch
               end)
-            | (Abs(a_x, a_t, a_b), Abs(b_x, b_t, b_b)) =>
+            | (Abs(_, _, _), Abs(_, _, _)) =>
+               if noabs then NoMatch else
                let 
                 val (a_cx, a_cb) = Thm.dest_abs (SOME "x") a
-                val (b_cx, b_cb) = Thm.dest_abs (SOME "x") b
+                val (_, b_cb) = Thm.dest_abs (SOME "x") b
                in
-                case try_match ctxt a_cb b_cb substI vIndex (a_cx::depVars) of
-                  Matches subst => Matches subst (* TODO need to quantify? *)
+                case try_match noabs ctxt a_cb b_cb substI vIndex (a_cx::depVars) of
+                  Matches subst => Matches subst (* This is a strange match -- why did the outer one not match? *)
                 | MightMatch (v,b) =>
                     MightMatch (v, Thm.lambda a_cx b)
                 | NoMatch => NoMatch
@@ -109,8 +110,8 @@ fun remove_pure_prop (ct: cterm): cterm =
 
 (* find an instantiation for the predicate in the back_subst theorem, 
   such that goal a and b are made (more) equal. *)
-fun find_back_subst_P ctxt (a: cterm) (b: cterm): (cterm,unit) Try_match_res =
-  case try_match ctxt (remove_pure_prop a) (remove_pure_prop b) ([],[]) 0 [] of
+fun find_back_subst_P noabs ctxt (a: cterm) (b: cterm): (cterm,unit) Try_match_res =
+  case try_match noabs ctxt (remove_pure_prop a) (remove_pure_prop b) ([],[]) 0 [] of
     MightMatch (v,body) => 
       let 
         val abs: cterm = Thm.lambda v body
@@ -133,10 +134,10 @@ fun maxidx_of_thms thms =
   List.foldl (uncurry max) ~1 (map maxidx_of_thm thms)
 
 (* one step of fuzzy_rule back_subst application *)
-fun fuzzy_rule_step ctxt maxidx rule iteration i thm : ((thm * int) Seq.seq) = 
+fun fuzzy_rule_step noabs ctxt maxidx rule iteration i thm : ((thm * int) Seq.seq) = 
   let 
     val goal = nth (Thm.cprems_of thm) (i-1)
-    val m = find_back_subst_P ctxt goal (Thm.cconcl_of rule)
+    val m = find_back_subst_P noabs ctxt goal (Thm.cconcl_of rule)
   in
   case m of
     Matches () =>
@@ -161,7 +162,7 @@ fun fuzzy_rule_step ctxt maxidx rule iteration i thm : ((thm * int) Seq.seq) =
               @{thm back_subst}
         val newThms = Tactic.resolve_tac ctxt [back_subst] i thm
       in
-        Seq.maps (fn(thm) => fuzzy_rule_step ctxt maxidx rule (iteration+1) i thm) newThms
+        Seq.maps (fn(thm) => fuzzy_rule_step noabs ctxt maxidx rule (iteration+1) i thm) newThms
       end
   end
 
@@ -171,7 +172,7 @@ fun range start count =
 
 (* tries to resolve the subgoals with index from goal_idxs in thm using the facts. 
    Works from left to right. *)
-fun resolve_with_facts ctxt (facts: thm list) (thm: thm) (goal_idxs: int list): thm Seq.seq =
+fun resolve_with_facts noabs ctxt (facts: thm list) (thm: thm) (goal_idxs: int list): thm Seq.seq =
   case facts of 
   [] => Seq.single thm
   | (f:: fs) =>
@@ -181,16 +182,16 @@ fun resolve_with_facts ctxt (facts: thm list) (thm: thm) (goal_idxs: int list): 
           val new_subgoals = length (Thm.cprems_of newthm) - length (Thm.cprems_of thm)
           val new_goal_idxs = (take (i-1) goal_idxs) @ (map (fn i => i + new_subgoals) (drop (i) goal_idxs))
         in
-          resolve_with_facts ctxt fs newthm new_goal_idxs
+          resolve_with_facts noabs ctxt fs newthm new_goal_idxs
         end
       val goal_idxs_seq = Seq.of_list goal_idxs
     in
       Seq.append 
         (goal_idxs_seq |> Seq.maps (fn i => Tactic.resolve_tac ctxt [f] i thm |> Seq.maps (continue i)))
-        (goal_idxs_seq |> Seq.maps (fn i => fuzzy_rule ctxt [f] [] i thm      |> Seq.maps (continue i)))
+        (goal_idxs_seq |> Seq.maps (fn i => fuzzy_rule noabs ctxt [f] [] i thm      |> Seq.maps (continue i)))
     end
       
-and fuzzy_rule (ctxt: Proof.context) (rules: thm list) (facts: thm list) (i: int) (thm: thm) : thm Seq.seq = 
+and fuzzy_rule (noabs: bool) (ctxt: Proof.context) (rules: thm list) (facts: thm list) (i: int) (thm: thm) : thm Seq.seq = 
     let 
       val subgoals = Thm.cprems_of thm
     in
@@ -200,14 +201,14 @@ and fuzzy_rule (ctxt: Proof.context) (rules: thm list) (facts: thm list) (i: int
      |> Seq.maps (fn rule =>
       let 
         val maxidx = maxidx_of_thms ([thm] @ rules @ facts)
-        val res_thms = fuzzy_rule_step ctxt maxidx rule 0 i thm
+        val res_thms = fuzzy_rule_step noabs ctxt maxidx rule 0 i thm
       in
         res_thms |> Seq.maps (fn (res_thm, _) =>
           let 
             val newSubgoals = Thm.cprems_of res_thm
             val subgoal_count = 1 + length newSubgoals - length subgoals
           in
-            resolve_with_facts ctxt facts res_thm (range i subgoal_count)
+            resolve_with_facts noabs ctxt facts res_thm (range i subgoal_count)
           end
         )
       end)
@@ -217,8 +218,10 @@ and fuzzy_rule (ctxt: Proof.context) (rules: thm list) (facts: thm list) (i: int
 val _ = 
   Theory.setup
     (Method.setup \<^binding>\<open>fuzzy_rule\<close>
-        (Attrib.thms  >> (fn rules => (fn ctxt => (METHOD (HEADGOAL o fuzzy_rule ctxt rules)))))
+        (Scan.lift (Args.mode "noabs" -- Scan.optional (Args.parens (Scan.repeat Parse.nat)) [0]) --
+            Attrib.thms >> (fn ((noabs,_), rules) => (fn ctxt => (METHOD (HEADGOAL o fuzzy_rule noabs ctxt rules)))))
         "apply some intro/elim rule with fuzzy matching");
+
 
 
 (* fuzzy cases*)
