@@ -86,20 +86,58 @@ lemma
   show "(fst x, snd x) = f (fst x) (snd x)" unfolding f_def ..
 qed
 
-subsection "Future Work"
+text "There is some limited support for unification of function abstractions.
+The following examples show, that @{method fuzzy_rule} can go into the body of the 
+existential quantifier and create fuzzy matches even for terms that depend on x.
+The resulting proof obligations are equalities on lambda terms, so it is useful to use the @{thm[source] ext} rule on them."
 
-text "In a future version, matching should also work for lambda instructions as in the following example:"
+lemma 
+  fixes P :: "int \<Rightarrow> int \<Rightarrow> bool"
+  assumes r: "\<exists>x. P x (1+3)"
+  shows "\<exists>x. P x 4"
+proof (fuzzy_rule r; intro ext)
+  show "1 + 3 = (4::int)"
+    by simp
+qed
+
+lemma 
+  fixes P :: "int \<Rightarrow> int \<Rightarrow> bool"
+  assumes r: "\<exists>x. P x 4"
+  shows "\<exists>x. P (1*x) 4"
+proof (fuzzy_rule r; intro ext)
+  show " \<And>x::int. x = 1 * x "
+    by simp
+qed
+
+
+section "Future Work"
+
+text "In a future version, matching should also work for more complex lambda instructions as in the following example:"
 
 lemma 
   shows "(SOME x::int. x \<ge> 5 \<and> x < 7 \<and> x mod 2 = 1) = 5"
   apply (fuzzy_rule someI)
   oops
 
+  text "It would also be nice if cong-rules like @{thm [source] if_cong} were used for generating the new subgoals.
+A motivating example:"
+
+lemma
+  fixes P :: "int \<Rightarrow> int \<Rightarrow> bool"
+  assumes r: "\<And>x y. P (if x < y then x else y) y "
+  shows "P (if x < y then min x y else y) y"
+  apply (fuzzy_rule r)
+  text \<open>Cannot prove goal  @{subgoals} without knowing that @{term "x < y"}. \<close>
+    oops
 
 
   text "Additionally, it would be nice to have a similar fuzzy alternative for the @{method subst} method."
 
+(*
+  section "Fuzzy goal cases"
 
-
+  text "The method   fuzzy-goal-cases is just like @{method goal_cases}, but it automatically
+  gives kind of meaningful names to cases by using the constants in the respective terms."
+*)
 
 end

@@ -10,24 +10,48 @@ datatype ('a,'subst) Try_match_res =
 (* a first-order substitution of types and terms *)
 type fo_subst = (((indexname * sort) * ctyp) list * ((indexname * typ) * cterm) list )
 
+fun contains_var (t: term) v: bool = 
+  case t of
+    (f $ a) => contains_var f v orelse contains_var a v
+  | Abs(_,_,b) => contains_var b v
+  | Var v' => v = v'
+  | _ => false
+
+fun starts_with_var (t: term): (indexname * typ) option =
+  case t of
+    (f $ a) => 
+      (case starts_with_var f of 
+          SOME v => if contains_var a v then NONE else SOME v
+        | NONE => NONE)
+  | Var v => SOME v 
+  | _ => NONE
+
+fun try_first_order_match (a: cterm) (b: cterm): fo_subst option =
+  (SOME (Thm.first_order_match (b, a))) 
+    handle Pattern.MATCH => 
+    (case starts_with_var (Thm.term_of a) of
+       SOME _ => SOME ([], []) (* TODO produce real substitution *)
+     | NONE => NONE)
+
+fun orelse_try f opt =
+  case opt of SOME _ => opt | NONE => f ()
+
 (* tries to first-order match in both directions, giving an existing substitution.*)
-fun try_first_order_match (a: cterm) (b: cterm) (subst: fo_subst): fo_subst option =
+fun try_first_order_match_bidirectional (a: cterm) (b: cterm) (subst: fo_subst): fo_subst option =
   let 
     val a: cterm = Thm.instantiate_cterm subst a
     val b: cterm = Thm.instantiate_cterm subst b
   in
-    (SOME (Thm.first_order_match (b, a))) 
-    handle Pattern.MATCH => 
-    ((SOME (Thm.first_order_match (a, b))) 
-    handle Pattern.MATCH => NONE)
+    try_first_order_match a b 
+    |> orelse_try (fn () => try_first_order_match b a)
   end
 
 (* returns the lambda var and lambda body to construct the match*)
-fun try_match (a: cterm) (b: cterm) subst vIndex: (cterm*cterm, ((indexname * sort) * ctyp) list *
+fun try_match ctxt (a: cterm) (b: cterm) substI vIndex (depVars: cterm list): (cterm*cterm, ((indexname * sort) * ctyp) list *
     ((indexname * typ) * cterm) list) Try_match_res = 
  
   let 
-    val m = try_first_order_match a b subst
+    val m = try_first_order_match_bidirectional a b substI
     val result = 
       case m of
           SOME subst => Matches subst (* TODO use subst*)
@@ -40,21 +64,37 @@ fun try_match (a: cterm) (b: cterm) subst vIndex: (cterm*cterm, ((indexname * so
                 val a_carg = Thm.dest_arg a
                 val b_carg = Thm.dest_arg b
               in
-                case try_match a_cf b_cf subst vIndex of
+                case try_match ctxt a_cf b_cf substI vIndex depVars of
                  Matches subst => 
                   let 
                   in
-                  case try_match a_carg b_carg subst vIndex of
+                  case try_match ctxt a_carg b_carg subst vIndex depVars of
                     Matches subst => Matches subst
                   | MightMatch (v,b) => MightMatch (v, Thm.apply a_cf b)
                   | NoMatch => 
-                      let val v: cterm = Thm.var (("x", 0), Thm.ctyp_of_cterm a_carg)
-                      in MightMatch (v, Thm.apply a_cf v)
+                      let 
+                        val t: typ = List.foldl (fn (depVar, rt) => Thm.typ_of_cterm depVar --> rt) (Thm.typ_of_cterm a_carg) depVars
+                        val ct: ctyp = Thm.ctyp_of ctxt t
+                        val v: cterm = Thm.var (("x", 1+vIndex), ct)
+                        val dv: cterm = List.foldl (fn (depVar, x) => Thm.apply x depVar ) v depVars
+                            (* (('a * 'b) -> 'b) -> 'b -> 'a list -> 'b *)
+                      in MightMatch (v, Thm.apply a_cf dv)
                       end
                   end
                 | MightMatch (v, b) => MightMatch (v, Thm.apply b  a_carg)
                 | NoMatch =>  NoMatch
               end)
+            | (Abs(a_x, a_t, a_b), Abs(b_x, b_t, b_b)) =>
+               let 
+                val (a_cx, a_cb) = Thm.dest_abs (SOME "x") a
+                val (b_cx, b_cb) = Thm.dest_abs (SOME "x") b
+               in
+                case try_match ctxt a_cb b_cb substI vIndex (a_cx::depVars) of
+                  Matches subst => Matches subst (* TODO need to quantify? *)
+                | MightMatch (v,b) =>
+                    MightMatch (v, Thm.lambda a_cx b)
+                | NoMatch => NoMatch
+               end
             | _ => NoMatch)
   in
      result
@@ -69,11 +109,11 @@ fun remove_pure_prop (ct: cterm): cterm =
 
 (* find an instantiation for the predicate in the back_subst theorem, 
   such that goal a and b are made (more) equal. *)
-fun find_back_subst_P (a: cterm) (b: cterm): (cterm,unit) Try_match_res =
-  case try_match (remove_pure_prop a) (remove_pure_prop b) ([],[]) 0 of
-    MightMatch (v,b) => 
+fun find_back_subst_P ctxt (a: cterm) (b: cterm): (cterm,unit) Try_match_res =
+  case try_match ctxt (remove_pure_prop a) (remove_pure_prop b) ([],[]) 0 [] of
+    MightMatch (v,body) => 
       let 
-        val abs: cterm = Thm.lambda v b
+        val abs: cterm = Thm.lambda v body
       in
         MightMatch abs
       end
@@ -96,7 +136,7 @@ fun maxidx_of_thms thms =
 fun fuzzy_rule_step ctxt maxidx rule iteration i thm : ((thm * int) Seq.seq) = 
   let 
     val goal = nth (Thm.cprems_of thm) (i-1)
-    val m = find_back_subst_P goal (Thm.cconcl_of rule)
+    val m = find_back_subst_P ctxt goal (Thm.cconcl_of rule)
   in
   case m of
     Matches () =>
@@ -178,5 +218,34 @@ val _ =
   Theory.setup
     (Method.setup \<^binding>\<open>fuzzy_rule\<close>
         (Attrib.thms  >> (fn rules => (fn ctxt => (METHOD (HEADGOAL o fuzzy_rule ctxt rules)))))
-        "apply some intro/elim rule with fuzzy matching")
+        "apply some intro/elim rule with fuzzy matching");
 
+
+(* fuzzy cases*)
+
+(*
+
+fun fuzzy_goal_cases_tac case_names : context_tactic =
+  fn (ctxt, st) =>
+    let
+      val cases =
+        (if null case_names then map string_of_int (1 upto Thm.nprems_of st) else case_names)
+        |> map (rpair [] o rpair [])
+        |> Rule_Cases.make_common ctxt (Thm.prop_of (Rule_Cases.internalize_params st));
+    in CONTEXT_CASES cases all_tac (ctxt, st) end;
+
+val _ =
+  Theory.setup 
+  (Method.setup \<^binding>\<open>fuzzy_goal_cases\<close> (Scan.lift (Scan.repeat Args.name_token) >> (fn names => fn _ =>
+    CONTEXT_METHOD (fn _ => fn (ctxt, st) =>
+      (case drop (Thm.nprems_of st) names of
+        [] => NONE
+      | bad =>
+          if detect_closure_state st then NONE
+          else
+            SOME (fn () => ("Excessive case name(s): " ^ commas_quote (map Token.content_of bad) ^
+              Position.here (#1 (Token.range_of bad)))))
+      |> (fn SOME msg => Seq.single (Seq.Error msg)
+           | NONE => fuzzy_goal_cases_tac (map Token.content_of names) (ctxt, st))))))
+
+*)
