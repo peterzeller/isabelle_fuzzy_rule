@@ -2,6 +2,7 @@ section \<open>Fuzzy Rule Examples\<close>
 
 theory fuzzyrule_examples
   imports fuzzyrule
+
 begin
 
 text \<open>The method @{method fuzzy_rule} works similar to @{method rule} but is more flexible in its application.\<close>

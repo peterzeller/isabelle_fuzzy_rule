@@ -3,5 +3,6 @@ session fuzzyrule = HOL +
 theories
     fuzzyrule
     fuzzyrule_examples
+    fuzzy_goal_cases
 document_files
     "root.tex"

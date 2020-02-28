@@ -223,32 +223,3 @@ val _ =
         "apply some intro/elim rule with fuzzy matching");
 
 
-
-(* fuzzy cases*)
-
-(*
-
-fun fuzzy_goal_cases_tac case_names : context_tactic =
-  fn (ctxt, st) =>
-    let
-      val cases =
-        (if null case_names then map string_of_int (1 upto Thm.nprems_of st) else case_names)
-        |> map (rpair [] o rpair [])
-        |> Rule_Cases.make_common ctxt (Thm.prop_of (Rule_Cases.internalize_params st));
-    in CONTEXT_CASES cases all_tac (ctxt, st) end;
-
-val _ =
-  Theory.setup 
-  (Method.setup \<^binding>\<open>fuzzy_goal_cases\<close> (Scan.lift (Scan.repeat Args.name_token) >> (fn names => fn _ =>
-    CONTEXT_METHOD (fn _ => fn (ctxt, st) =>
-      (case drop (Thm.nprems_of st) names of
-        [] => NONE
-      | bad =>
-          if detect_closure_state st then NONE
-          else
-            SOME (fn () => ("Excessive case name(s): " ^ commas_quote (map Token.content_of bad) ^
-              Position.here (#1 (Token.range_of bad)))))
-      |> (fn SOME msg => Seq.single (Seq.Error msg)
-           | NONE => fuzzy_goal_cases_tac (map Token.content_of names) (ctxt, st))))))
-
-*)
