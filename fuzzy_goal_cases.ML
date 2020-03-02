@@ -39,10 +39,6 @@ fun extract_assumes2 (prop: term) =
     val remove_dot = remove_dot_h [];
     fun remove_dot_s s = String.explode s |> remove_dot |> String.implode;
     fun derive_name (de_bruijn_names: string list) (hyp: term) = 
-      let 
-        val _ = writeln ("names = " ^ @{make_string} de_bruijn_names)
-        val _ = writeln ("hyp = " ^ @{make_string} hyp)
-      in
       case hyp of
         Const (n, _) => remove_dot_s n
        | Term.Free (n, _) => n 
@@ -59,7 +55,6 @@ fun extract_assumes2 (prop: term) =
        | Const ("HOL.implies", _) $ _ $ b => "implies_" ^ derive_name de_bruijn_names b
        | Const ("HOL.disj", _) $ a $ _ => "cases_" ^ derive_name de_bruijn_names a 
        | x $ _ => derive_name de_bruijn_names x
-       end
     fun clean_char c = if Char.isAlphaNum c orelse c = #"'" then c else  #"_"
     
     fun clean_name s = String.explode s |> remove_dot |> map clean_char |> String.implode
