@@ -19,9 +19,16 @@ fun mapState _ _ [] = []
 fun contains [] _ = false
   | contains (x::xs) y = (x = y orelse contains xs y)
 
-fun extract_assumes2 prop = 
+fun extract_assumes2 (prop: term) = 
   let 
     val hyps = Logic.strip_assums_hyp prop;
+    fun remove_trailing_underscore s =
+      let val l = String.explode s
+      in 
+        if List.last l = #"_" then List.take (l, List.length l - 1)
+        else l
+      end |> String.implode
+    val params = Logic.strip_params prop |> map fst |> map remove_trailing_underscore |> List.rev
     fun make_unique used name i = 
       if i = 2 andalso not (contains used name) then name
       else if contains used (name ^ @{make_string} i) then make_unique used name (1+i)
@@ -31,25 +38,32 @@ fun extract_assumes2 prop =
       | remove_dot_h acc (x::xs) = remove_dot_h (x::acc) xs
     val remove_dot = remove_dot_h [];
     fun remove_dot_s s = String.explode s |> remove_dot |> String.implode;
-    fun derive_name (hyp: term) = case hyp of
+    fun derive_name (de_bruijn_names: string list) (hyp: term) = 
+      let 
+        val _ = writeln ("names = " ^ @{make_string} de_bruijn_names)
+        val _ = writeln ("hyp = " ^ @{make_string} hyp)
+      in
+      case hyp of
         Const (n, _) => remove_dot_s n
        | Term.Free (n, _) => n 
        | Var ((s,_), _) => s
-       | Bound _  => "bound"
-       | Abs (_,_,b) => derive_name b
-       | Const ("HOL.Trueprop", _) $ y => derive_name y
+       | Bound i  => 
+            if i < length de_bruijn_names then List.nth(de_bruijn_names, i) else "bound" ^ @{make_string} i
+       | Abs (n,_,b) => derive_name (n::de_bruijn_names) b
+       | Const ("HOL.Trueprop", _) $ y => derive_name de_bruijn_names y
        | Const ("HOL.eq", _) $ Free (n, _) $ _ => n ^ "_def"
-       | Const ("HOL.eq", _) $ l => derive_name l ^ "_eq"
-       | Const ("HOL.All", _) $ b => "All_" ^ derive_name b
-       | Const ("HOL.Ex", _) $ b => "Ex_" ^ derive_name b
-       | Const ("HOL.Not", _) $ b => "not_" ^ derive_name b
-       | Const ("HOL.implies", _) $ _ $ b => "implies_" ^ derive_name b
-       | Const ("HOL.disj", _) $ a $ _ => "cases_" ^ derive_name a 
-       | x $ _ => derive_name x;  
-    fun clean_char c = if Char.isAlpha c then c else  #"_"
+       | Const ("HOL.eq", _) $ l => derive_name de_bruijn_names l ^ "_eq"
+       | Const ("HOL.All", _) $ b => "All_" ^ derive_name de_bruijn_names b
+       | Const ("HOL.Ex", _) $ b => "Ex_" ^ derive_name de_bruijn_names b
+       | Const ("HOL.Not", _) $ b => "not_" ^ derive_name de_bruijn_names b
+       | Const ("HOL.implies", _) $ _ $ b => "implies_" ^ derive_name de_bruijn_names b
+       | Const ("HOL.disj", _) $ a $ _ => "cases_" ^ derive_name de_bruijn_names a 
+       | x $ _ => derive_name de_bruijn_names x
+       end
+    fun clean_char c = if Char.isAlphaNum c orelse c = #"'" then c else  #"_"
     
     fun clean_name s = String.explode s |> remove_dot |> map clean_char |> String.implode
-    fun extract_name used hyp = make_unique used (derive_name hyp |> clean_name) 2;
+    fun extract_name used hyp = make_unique used (derive_name params hyp |> clean_name) 2;
     fun to_named used hyp =
       let val name = extract_name used hyp 
       in (name::used, (name, [hyp])) end;
@@ -144,7 +158,7 @@ fun fuzzy_goal_cases_tac case_names : context_tactic =
   fn (ctxt, st) =>
     let
       val names = (if null case_names then map string_of_int (1 upto Thm.nprems_of st) else case_names);
-      val info = map (rpair [] o rpair ["q", "r"]) names;
+      val info = map (rpair [] o rpair []) names;
       val cases = make ctxt NONE (Thm.prop_of (Rule_Cases.internalize_params st)) info;
     in CONTEXT_CASES cases all_tac (ctxt, st) end;
 
