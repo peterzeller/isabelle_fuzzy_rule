@@ -40,4 +40,13 @@ proof (intro impI, elim exE conjE, fuzzy_goal_cases X)
   oops
 
 
+lemma "\<lbrakk>\<And>x y. g x = h y \<Longrightarrow> f x = y\<rbrakk> \<Longrightarrow> C"
+proof (fuzzy_goal_cases X)
+  case (X)
+
+  have "g x = h y \<Longrightarrow> f x = y" for x y using X.f_eq .
+  oops
+
+
+
 end

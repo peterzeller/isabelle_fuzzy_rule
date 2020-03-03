@@ -40,7 +40,7 @@ fun extract_assumes2 (prop: term) =
     fun remove_dot_s s = String.explode s |> remove_dot |> String.implode;
     fun derive_name (de_bruijn_names: string list) (hyp: term) = 
       case hyp of
-        Const (n, _) => remove_dot_s n
+        Const (n, _) => let val _ = writeln n in remove_dot_s n end
        | Term.Free (n, _) => n 
        | Var ((s,_), _) => s
        | Bound i  => 
@@ -50,6 +50,8 @@ fun extract_assumes2 (prop: term) =
        | Const ("HOL.eq", _) $ Free (n, _) $ _ => n ^ "_def"
        | Const ("HOL.eq", _) $ l => derive_name de_bruijn_names l ^ "_eq"
        | Const ("HOL.All", _) $ b => "All_" ^ derive_name de_bruijn_names b
+       | Const ("Pure.all",_) $ b => derive_name de_bruijn_names b
+       | Const ("Pure.imp",_) $ _ $ r => derive_name de_bruijn_names r
        | Const ("HOL.Ex", _) $ b => "Ex_" ^ derive_name de_bruijn_names b
        | Const ("HOL.Not", _) $ b => "not_" ^ derive_name de_bruijn_names b
        | Const ("HOL.implies", _) $ _ $ b => "implies_" ^ derive_name de_bruijn_names b
